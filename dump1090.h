@@ -251,7 +251,11 @@ typedef enum {
 #define MODES_INTERACTIVE_DISPLAY_TTL 60000     // Delete from display after 60 seconds
 
 #define MODES_NET_HEARTBEAT_INTERVAL 60000      // milliseconds
-
+#ifdef ENABLE_HTTP
+#define MODES_NET_SERVICES_NUM          1	// http only
+#define MODES_NET_HTTP_PORT          8080
+#define HTMLPATH   "/usr/lib/fr24/public_html"
+#endif
 #define MODES_CLIENT_BUF_SIZE  1024
 #define MODES_NET_SNDBUF_SIZE (1024*64)
 #define MODES_NET_SNDBUF_MAX  (7)
@@ -324,7 +328,13 @@ struct {                             // Internal state
     char           aneterr[ANET_ERR_LEN];
     struct net_service *services;    // Active services
     struct client *clients;          // Our clients
-
+#ifdef ENABLE_HTTP
+    struct servicehttp *serviceshttp;    	   // Active services
+    struct clienthttp *clientshttp;          // Our clients
+    int    	https;            					 // HTTP listening socket
+    int   	net_http_port;
+	unsigned int stat_http_requests;
+#endif
     struct net_service *beast_verbatim_service;  // Beast-format output service, verbatim mode
     struct net_service *beast_cooked_service;    // Beast-format output service, "cooked" mode
 

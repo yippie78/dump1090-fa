@@ -2,12 +2,17 @@ PROGNAME=dump1090
 
 RTLSDR ?= yes
 BLADERF ?= yes
+HTTP ?= yes
 
 CPPFLAGS += -DMODES_DUMP1090_VERSION=\"$(DUMP1090_VERSION)\" -DMODES_DUMP1090_VARIANT=\"dump1090-fa\"
 
 DIALECT = -std=c11
 CFLAGS += $(DIALECT) -O2 -g -Wall -Werror -W -D_DEFAULT_SOURCE
 LIBS = -lpthread -lm -lrt
+
+ifeq ($(HTTP), yes)
+  CPPFLAGS += -DENABLE_HTTP
+endif
 
 ifeq ($(RTLSDR), yes)
   SDR_OBJ += sdr_rtlsdr.o

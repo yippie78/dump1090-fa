@@ -65,6 +65,10 @@
 int anetTcpConnect(char *err, char *addr, char *service);
 int anetTcpNonBlockConnect(char *err, char *addr, char *service);
 int anetRead(int fd, char *buf, int count);
+#ifdef ENABLE_HTTP
+int anetTcpServerhttp(char *err, int port, char *bindaddr);
+int anetTcpAccepthttp(char *err, int s, char *ip, int *port);
+#endif
 int anetTcpServer(char *err, char *service, char *bindaddr, int *fds, int nfds);
 int anetTcpAccept(char *err, int serversock);
 int anetWrite(int fd, char *buf, int count);

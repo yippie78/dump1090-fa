@@ -258,6 +258,44 @@ static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len) {
     }
     return ANET_OK;
 }
+#ifdef ENABLE_HTTP
+int anetTcpServerhttp(char *err, int port, char *bindaddr)
+{
+    int s;
+    struct sockaddr_in sa;
+
+    if ((s = anetCreateSocket(err,AF_INET)) == ANET_ERR)
+        return ANET_ERR;
+
+    memset(&sa,0,sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((uint16_t)port);
+    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bindaddr && inet_aton(bindaddr, (void*)&sa.sin_addr) == 0) {
+        anetSetError(err, "invalid bind address");
+        close(s);
+        return ANET_ERR;
+    }
+    if (anetListen(err,s,(struct sockaddr*)&sa,sizeof(sa)) == ANET_ERR)
+        return ANET_ERR;
+    return s;
+}
+// 
+static int anetGenericAccept(char *err, int s, struct sockaddr *sa, socklen_t *len);
+
+int anetTcpAccepthttp(char *err, int s, char *ip, int *port) {
+    int fd;
+    struct sockaddr_in sa;
+    socklen_t salen = sizeof(sa);
+    if ((fd = anetGenericAccept(err,s,(struct sockaddr*)&sa,&salen)) == ANET_ERR)
+        return ANET_ERR;
+
+    if (ip) strcpy(ip,inet_ntoa(sa.sin_addr));
+    if (port) *port = ntohs(sa.sin_port);
+    return fd;
+}
+
+#endif
 
 int anetTcpServer(char *err, char *service, char *bindaddr, int *fds, int nfds)
 {

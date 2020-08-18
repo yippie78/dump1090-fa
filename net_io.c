@@ -244,8 +244,37 @@ struct net_service *makeFatsvOutputService(void)
     return serviceInit("FATSV TCP output", &Modes.fatsv_out, NULL, READ_MODE_IGNORE, NULL, NULL);
 }
 
+#ifdef ENABLE_HTTP
+struct servicehttp serviceshttp[MODES_NET_SERVICES_NUM];
+#endif
 void modesInitNet(void) {
     struct net_service *s;
+#ifdef ENABLE_HTTP
+    int j;
+
+	struct servicehttp svc[MODES_NET_SERVICES_NUM] = {
+		{"HTTP server", &Modes.https, Modes.net_http_port, 1}
+	};
+
+	memcpy(&serviceshttp, &svc, sizeof(svc));//serviceshttp = svc;
+    for (j = 0; j < MODES_NET_SERVICES_NUM; j++) {
+		serviceshttp[j].enabled = (serviceshttp[j].port != 0);
+		if (serviceshttp[j].enabled) {
+			int s = anetTcpServerhttp(Modes.aneterr, serviceshttp[j].port, Modes.net_bind_address);
+			if (s == -1) {
+				fprintf(stderr, "Error opening the listening port %d (%s): %s\n",
+					serviceshttp[j].port, serviceshttp[j].descr, Modes.aneterr);
+				exit(1);
+			}
+			anetNonBlock(Modes.aneterr, s);
+			*serviceshttp[j].socket = s;
+		} else {
+			if (Modes.debug & MODES_DEBUG_NET) printf("%s port is disabled\n", serviceshttp[j].descr);
+		}
+    }
+    Modes.clientshttp = NULL; 
+    Modes.serviceshttp = NULL;
+#endif
 
     signal(SIGPIPE, SIG_IGN);
     Modes.clients = NULL;
@@ -274,6 +303,415 @@ void modesInitNet(void) {
     s = makeBeastInputService();
     serviceListen(s, Modes.net_bind_address, Modes.net_input_beast_ports);
 }
+#ifdef ENABLE_HTTP
+struct clienthttp * modesAcceptClientshttp(void) {
+    int fd, port;
+    unsigned int j;
+    struct clienthttp *c;
+
+    for (j = 0; j < MODES_NET_SERVICES_NUM; j++) {
+		if (serviceshttp[j].enabled) {
+			fd = anetTcpAccepthttp(Modes.aneterr, *serviceshttp[j].socket, NULL, &port);
+			if (fd == -1) continue;
+
+			anetNonBlock(Modes.aneterr, fd);
+			c = (struct clienthttp *) malloc(sizeof(*c));
+			c->service    = *serviceshttp[j].socket;
+			c->next       = Modes.clientshttp;
+			c->fd         = fd;
+			c->buflen     = 0;
+			Modes.clientshttp = c;
+			anetSetSendBuffer(Modes.aneterr,fd, (MODES_NET_SNDBUF_SIZE << Modes.net_sndbuf_size));
+
+			//j--; // Try again with the same listening port	// [yk:] temp
+
+			if (Modes.debug & MODES_DEBUG_NET)
+				printf("Created new client %d\n", fd);
+		}
+    }
+    return Modes.clientshttp;
+}
+// On error free the client, collect the structure, adjust maxfd if needed.
+void modesFreeClienthttp(struct clienthttp *c) {
+
+    // Unhook this client from the linked list of clients
+    struct clienthttp *p = Modes.clientshttp;
+    if (p) {
+        if (p == c) {
+            Modes.clientshttp = c->next;
+        } else {
+            while ((p) && (p->next != c)) {
+                p = p->next;
+            }
+            if (p) {
+                p->next = c->next;
+            }
+        }
+    }
+
+    free(c);
+}
+//
+void modesCloseClienthttp(struct clienthttp *c) {
+	close(c->fd);
+
+    if (Modes.debug & MODES_DEBUG_NET)
+        printf("Closing client %d\n", c->fd);
+
+    c->fd = -1;
+}
+/* not required.
+// Send the specified message to all clients listening for a given service
+void modesSendAllClientshttp(int service, void *msg, int len) {
+    struct clienthttp *c = Modes.clientshttp;
+
+    while (c) {
+        // Read next before servicing client incase the service routine deletes the client! 
+        struct clienthttp *next = c->next;
+
+        if (c->fd != -1) {
+            if (c->service == service) {
+#ifndef _WIN32
+                int nwritten = write(c->fd, msg, len);
+#else
+                int nwritten = send(c->fd, msg, len, 0 );
+#endif
+                if (nwritten != len) {
+                    modesCloseClienthttp(c);
+                }
+            }
+        } else {
+            modesFreeClienthttp(c);
+        }
+        c = next;
+    }
+} */
+// Return a description of planes in json. No metric conversion
+//
+char *aircraftsToJson(int *len) {
+    time_t now = time(NULL);
+    struct aircraft *a = Modes.aircrafts;
+    int buflen = 1024; // The initial buffer is incremented as needed
+    char *buf = (char *) malloc(buflen), *p = buf;
+    int l;
+
+    l = snprintf(p,buflen,"[\n");
+    p += l; buflen -= l;
+    while(a) {
+        //int position = 0;
+        //int track = 0;
+
+        if (!a->reliable) { // skip any fudged ICAO records Mode A/C
+            a = a->next;
+            continue;
+        }
+
+        /*if (a->bFlags & MODES_ACFLAGS_LATLON_VALID) {
+            position = 1;
+        }
+        
+        if (a->bFlags & MODES_ACFLAGS_HEADING_VALID) {
+            track = 1;
+        } */
+        
+        // No metric conversion
+        l = snprintf(p,buflen,
+            "{\"hex\":\"%06x\", \"squawk\":\"%04x\", \"flight\":\"%s\", \"lat\":%f, "
+            "\"lon\":%f, \"validposition\":%d, \"altitude\":%d,  \"vert_rate\":%d,\"track\":%.1f, \"validtrack\":%d,"
+            "\"speed\":%.1f, \"messages\":%ld, \"seen\":%d},\n",
+            a->addr, a->squawk, a->callsign, a->lat, a->lon, trackDataValid(&a->position_valid), a->altitude_geom, a->geom_rate, a->track, trackDataValid(&a->track_valid),
+            a->gs, a->messages, (int)(now - a->seen));
+        p += l; buflen -= l;
+        
+        //Resize if needed
+        if (buflen < 256) {
+            int used = p-buf;
+            buflen += 1024; // Our increment.
+            buf = (char *) realloc(buf,used+buflen);
+            p = buf+used;
+        }
+        
+        a = a->next;
+    }
+
+    //Remove the final comma if any, and closes the json array.
+    if (*(p-2) == ',') {
+        *(p-2) = '\n';
+        p--;
+        buflen++;
+    }
+
+    l = snprintf(p,buflen,"]\n");
+    p += l; buflen -= l;
+
+    *len = p-buf;
+    return buf;
+}
+//
+// Get an HTTP request header and write the response to the client.
+// gain here we assume that the socket buffer is enough without doing
+// any kind of userspace buffering.
+//
+// Returns 1 on error to signal the caller the client connection should
+// be closed.
+//
+#define MODES_CONTENT_TYPE_HTML "text/html;charset=utf-8"
+#define MODES_CONTENT_TYPE_CSS  "text/css;charset=utf-8"
+#define MODES_CONTENT_TYPE_JSON "application/json;charset=utf-8"
+#define MODES_CONTENT_TYPE_JS   "application/javascript;charset=utf-8"
+int handleHTTPRequest(struct clienthttp *c, char *p) {
+    char hdr[512];
+    int clen, hdrlen;
+    int httpver, keepalive;
+    int statuscode = 500;
+    char *url, *content;
+    char ctype[48];
+    char getFile[1024];
+    char *ext;
+
+    if (Modes.debug & MODES_DEBUG_NET)
+        printf("\nHTTP request: %s\n", c->buf);
+
+    // Minimally parse the request.
+    httpver = (strstr(p, "HTTP/1.1") != NULL) ? 11 : 10;
+    if (httpver == 10) {
+        // HTTP 1.0 defaults to close, unless otherwise specified.
+        //keepalive = strstr(p, "Connection: keep-alive") != NULL;
+    } else if (httpver == 11) {
+        // HTTP 1.1 defaults to keep-alive, unless close is specified.
+        //keepalive = strstr(p, "Connection: close") == NULL;
+    }
+    keepalive = 0;
+
+    // Identify he URL.
+    p = strchr(p,' ');
+    if (!p) return 1; // There should be the method and a space
+    url = ++p;        // Now this should point to the requested URL
+    p = strchr(p, ' ');
+    if (!p) return 1; // There should be a space before HTTP/
+    *p = '\0';
+
+    if (Modes.debug & MODES_DEBUG_NET) {
+        printf("\nHTTP keep alive: %d\n", keepalive);
+        printf("HTTP requested URL: %s\n\n", url);
+    }
+    
+    if (strlen(url) < 2) {
+        snprintf(getFile, sizeof getFile, "%s/gmap.html", HTMLPATH); // Default file
+    } else {
+        snprintf(getFile, sizeof getFile, "%s/%s", HTMLPATH, url);
+    }
+
+    // Select the content to send, we have just two so far:
+    // "/" -> Our google map application.
+    // "/data.json" -> Our ajax request to update planes.
+    if (strstr(url, "/data.json")) {
+        statuscode = 200;
+        content = aircraftsToJson(&clen);
+		//printf("\n[len=%d], %s", clen, content); // [yk:] 
+        //snprintf(ctype, sizeof ctype, MODES_CONTENT_TYPE_JSON);
+		if(clen < 5) {
+			free(content);
+			return !keepalive;
+		}
+    } else {
+        struct stat sbuf;
+        int fd = -1;
+        char *rp, *hrp;
+
+        rp = realpath(getFile, NULL);
+        hrp = realpath(HTMLPATH, NULL);
+        hrp = (hrp ? hrp : HTMLPATH);
+        clen = -1;
+        content = strdup("Server error occured");
+        if (rp && (!strncmp(hrp, rp, strlen(hrp)))) {
+            if (stat(getFile, &sbuf) != -1 && (fd = open(getFile, O_RDONLY)) != -1) {
+                content = (char *) realloc(content, sbuf.st_size);
+                if (read(fd, content, sbuf.st_size) != -1) {
+                    clen = sbuf.st_size;
+                    statuscode = 200;
+                }
+            }
+        } else {
+            errno = ENOENT;
+        }
+
+        if (clen < 0) {
+            content = realloc(content, 128);
+            clen = snprintf(content, 128,"Error opening HTML file: %s", strerror(errno));
+            statuscode = 404;
+        }
+        
+        if (fd != -1) {
+            close(fd);
+        }
+    }
+
+    // Get file extension and content type
+    snprintf(ctype, sizeof ctype, MODES_CONTENT_TYPE_HTML); // Default content type
+    ext = strrchr(getFile, '.');
+
+    if (strlen(ext) > 0) {
+        if (strstr(ext, ".json")) {
+            snprintf(ctype, sizeof ctype, MODES_CONTENT_TYPE_JSON);
+        } else if (strstr(ext, ".css")) {
+            snprintf(ctype, sizeof ctype, MODES_CONTENT_TYPE_CSS);
+        } else if (strstr(ext, ".js")) {
+            snprintf(ctype, sizeof ctype, MODES_CONTENT_TYPE_JS);
+        }
+    }
+
+    // Create the header and send the reply
+    hdrlen = snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 %d \r\n"
+        "Server: Dump1090\r\n"
+        "Content-Type: %s\r\n"
+        "Connection: %s\r\n"
+        "Content-Length: %d\r\n"
+        "Cache-Control: no-cache, must-revalidate\r\n"
+        "Expires: Sat, 26 Jul 1997 05:00:00 GMT\r\n"
+        "\r\n",
+        statuscode,
+        ctype,
+        keepalive ? "keep-alive" : "close",
+        clen);
+
+    if (Modes.debug & MODES_DEBUG_NET) {
+        printf("HTTP Reply header:\n%s", hdr);
+    }
+
+    // Send header and content.
+#ifndef _WIN32
+	//printf("Sending [len=%d], %s\n", clen, content); // [yk:] temp
+    if ( (write(c->fd, hdr, hdrlen) != hdrlen) 
+      || (write(c->fd, content, clen) != clen) ) {
+#else
+    if ( (send(c->fd, hdr, hdrlen, 0) != hdrlen) 
+      || (send(c->fd, content, clen, 0) != clen) ) {
+#endif
+        free(content);
+        return 1;
+    }
+	
+	//printf("freeing  %s\n", content); // [yk:] temp
+    free(content);
+    Modes.stat_http_requests++;
+    return !keepalive;
+}
+// This function polls the clients using read() in order to receive new
+// messages from the net.
+//
+// The message is supposed to be separated from the next message by the
+// separator 'sep', which is a null-terminated C string.
+//
+// Every full message received is decoded and passed to the higher layers
+// calling the function's 'handler'.
+//
+// The handler returns 0 on success, or 1 to signal this function we should
+// close the connection with the client in case of non-recoverable errors.
+//
+void modesReadFromClienthttp(struct clienthttp *c, char *sep,
+                         int(*handler)(struct clienthttp *, char *)) {
+    int left;
+    int nread;
+    int fullmsg;
+    int bContinue = 1;
+    char *s, *e; //, *p;
+
+    while(bContinue) {
+
+        fullmsg = 0;
+        left = MODES_CLIENT_BUF_SIZE - c->buflen;
+        // If our buffer is full discard it, this is some badly formatted shit
+        if (left <= 0) {
+            c->buflen = 0;
+            left = MODES_CLIENT_BUF_SIZE;
+            // If there is garbage, read more to discard it ASAP
+        }
+#ifndef _WIN32
+        nread = read(c->fd, c->buf+c->buflen, left);
+#else
+        nread = recv(c->fd, c->buf+c->buflen, left, 0);
+        if (nread < 0) {errno = WSAGetLastError();}
+#endif
+        if (nread == 0) {
+			modesCloseClienthttp(c);
+			return;
+		}
+
+        // If we didn't get all the data we asked for, then return once we've processed what we did get.
+        if (nread != left) {
+            bContinue = 0;
+        }
+#ifndef _WIN32
+        if ( (nread < 0 && errno != EAGAIN && errno != EWOULDBLOCK) || nread == 0 ) { // Error, or end of file
+#else
+        if ( (nread < 0) && (errno != EWOULDBLOCK)) { // Error, or end of file
+#endif
+            modesCloseClienthttp(c);
+            return;
+        }
+        if (nread <= 0) {
+            break; // Serve next client
+        }
+        c->buflen += nread;
+
+        // Always null-term so we are free to use strstr() (it won't affect binary case)
+        c->buf[c->buflen] = '\0';
+
+        e = s = c->buf;                                // Start with the start of buffer, first message
+
+        /*if (c->service == Modes.bis) {
+            // This is the Beast Binary scanning case.
+			// do nothing
+        } else */ {
+            //
+            // This is the ASCII scanning case, AVR RAW or HTTP at present
+            // If there is a complete message still in the buffer, there must be the separator 'sep'
+            // in the buffer, note that we full-scan the buffer at every read for simplicity.
+            //
+            while ((e = strstr(s, sep)) != NULL) { // end of first message if found
+                *e = '\0';                         // The handler expects null terminated strings
+                if (handler(c, s)) {               // Pass message to handler.
+                    modesCloseClienthttp(c);           // Handler returns 1 on error to signal we .
+                    return;                        // should close the client connection
+                }
+                s = e + strlen(sep);               // Move to start of next message
+                fullmsg = 1;
+            }
+        }
+
+        if (fullmsg) {                             // We processed something - so
+            c->buflen = &(c->buf[c->buflen]) - s;  //     Update the unprocessed buffer length
+            memmove(c->buf, s, c->buflen);         //     Move what's remaining to the start of the buffer
+        } else {                                   // If no message was decoded process the next client
+            break;
+        }
+    }
+}
+// Read data from clients. This function actually delegates a lower-level
+// function that depends on the kind of service (raw, http, ...).
+//
+void modesReadFromClientshttp(void) {
+
+    struct clienthttp *c = modesAcceptClientshttp();
+
+    while (c) {
+            // Read next before servicing client incase the service routine deletes the client! 
+            struct clienthttp *next = c->next;
+
+        if (c->fd >= 0) {
+            if (c->service == Modes.https) {
+                modesReadFromClienthttp(c,"\r\n\r\n",handleHTTPRequest);
+            }
+        } else {
+            modesFreeClienthttp(c);
+        }
+        c = next;
+    }
+}
+#endif
+
 //
 //=========================================================================
 //
@@ -2386,6 +2824,10 @@ void modesNetPeriodicWork(void) {
     uint64_t now = mstime();
     int need_flush = 0;
 
+#ifdef ENABLE_HTTP
+    // Accept new http connections
+	modesReadFromClientshttp();
+#endif
     // Accept new connections
     modesAcceptClients();
 

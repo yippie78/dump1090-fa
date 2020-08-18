@@ -116,6 +116,9 @@ void modesInitConfig(void) {
     Modes.net_output_sbs_ports    = strdup("30003");
     Modes.net_input_beast_ports   = strdup("30004,30104");
     Modes.net_output_beast_ports  = strdup("30005");
+#ifdef ENABLE_HTTP
+	Modes.net_http_port           = MODES_NET_HTTP_PORT;
+#endif
     Modes.interactive_display_ttl = MODES_INTERACTIVE_DISPLAY_TTL;
     Modes.json_interval           = 1000;
     Modes.json_location_accuracy  = 1;
@@ -294,6 +297,9 @@ void showHelp(void) {
 "--no-modeac-auto         Don't enable Mode A/C if requested by a Beast connection\n"
 "--net-only               Enable just networking, no RTL device or file used\n"
 "--net-bind-address <ip>  IP address to bind to (default: Any; Use 127.0.0.1 for private)\n"
+#ifdef ENABLE_HTTP
+"--net-http-port <port>   HTTP server port (default: 8080)\n"
+#endif
 "--net-ri-port <ports>    TCP raw input listen ports  (default: 30001)\n"
 "--net-ro-port <ports>    TCP raw output listen ports (default: 30002)\n"
 "--net-sbs-port <ports>   TCP BaseStation output listen ports (default: 30003)\n"
@@ -526,9 +532,13 @@ int main(int argc, char **argv) {
             free(Modes.net_bind_address);
             Modes.net_bind_address = strdup(argv[++j]);
         } else if (!strcmp(argv[j],"--net-http-port") && more) {
+#ifdef ENABLE_HTTP
+            Modes.net_http_port = atoi(argv[++j]);
+#else
             if (strcmp(argv[++j], "0")) {
                 fprintf(stderr, "warning: --net-http-port not supported in this build, option ignored.\n");
             }
+#endif
         } else if (!strcmp(argv[j],"--net-sbs-port") && more) {
             free(Modes.net_output_sbs_ports);
             Modes.net_output_sbs_ports = strdup(argv[++j]);

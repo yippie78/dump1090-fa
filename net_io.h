@@ -52,6 +52,23 @@ struct net_service {
     read_fn read_handler;
 };
 
+#ifdef ENABLE_HTTP
+struct servicehttp {	// same as struct net_service define in net_io.h
+	char *descr;
+	int *socket;
+	int port;
+	int enabled;
+};
+
+struct clienthttp {		// [yk:] http connections, backported
+    struct clienthttp*  next;           // Pointer to next client
+    int    fd;                           // File descriptor
+    int    service;                      // TCP port the client is connected to
+    int    buflen;                       // Amount of data on buffer
+    char   buf[MODES_CLIENT_BUF_SIZE+1]; // Read buffer
+};
+#endif
+
 // Structure used to describe a networking client
 struct client {
     struct client*  next;                // Pointer to next client
