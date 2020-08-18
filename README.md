@@ -5,9 +5,9 @@ This repo is work-in-progress, backported code from "MalcolmRobb/dump1090.git".
 To verify try http://192.168.xxx.yyy:8080/data.json should show aircraft data, this data.json is called by the api to fwd data via --net-http-port
 
 # use manual build command to turn on/off this feature
-make BLADERF=no HTTP=no                 will disable bladeRF and --net-http-port support and remove their dependency
+"make BLADERF=no HTTP=no"                 - will disable bladeRF and --net-http-port support and remove their dependency
 
-make BLADERF=no                         will disable bladeRF but enable --net-http-port support.
+"make BLADERF=no"                         - will disable bladeRF but enable --net-http-port support.
 
 
 # ********** No change from flightaware/dump1090 *****************
