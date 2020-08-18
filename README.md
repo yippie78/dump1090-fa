@@ -1,3 +1,16 @@
+# Forked from flightaware/dump1090, 
+has missing --net-http-port option, this option comes handy to monitor stats locally.
+This repo is work-in-progress, backported code from "MalcolmRobb/dump1090.git". 
+--net-http-port (default: 8080) option works however webpage won't show aircrafts even though "handleHTTPRequest" api does send aircraft data.
+To verify try http://192.168.xxx.yyy:8080/data.json should show aircraft data, this data.json is called by the api to fwd data via --net-http-port
+
+# use manual build command to turn on/off this feature
+make BLADERF=no HTTP=no                 will disable bladeRF and --net-http-port support and remove their dependency
+
+make BLADERF=no                         will disable bladeRF but enable --net-http-port support.
+
+
+# ********** No change from flightaware/dump1090 *****************
 # dump1090-fa Debian/Raspbian packages
 
 This is a fork of [dump1090-mutability](https://github.com/mutability/dump1090)
